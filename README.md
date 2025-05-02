@@ -1,4 +1,3 @@
-/* ================= README.md ================= */
 /*
 # Blockchain Voting System
 
