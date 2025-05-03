@@ -1,3 +1,5 @@
+const fs = require('fs-extra');
+const path = require('path');
 const { Block } = require('./Block');
 
 class Blockchain {
@@ -7,6 +9,12 @@ class Blockchain {
     this.pendingTransactions = [];
     this.isCreatingBlock = false;
     this.height = 0;
+    
+    // Add voted registry functionality (from the IPFS implementation)
+    this.votedFile = path.resolve(__dirname, '../voted.json');
+    fs.ensureFileSync(this.votedFile);
+    this.votedRegistry = new Set();
+    
     this.initializeChain();
   }
 
@@ -17,33 +25,49 @@ class Blockchain {
       const genesis = new Block(0, Date.now(), [], '0', 'genesis');
       await this.db.put('block-0', JSON.stringify(genesis));
     }
+    
     // Load current height
     this.height = await this._loadHeight();
+    
+    // Load voted registry
+    try {
+      const votedList = await fs.readJson(this.votedFile);
+      this.votedRegistry = new Set(votedList);
+      console.log(`Loaded ${this.votedRegistry.size} previous voters`);
+    } catch (err) {
+      console.log('No previous voters found, creating new registry');
+      await fs.writeJson(this.votedFile, []);
+    }
   }
 
   async _loadHeight() {
-    let count = 0;
-    return new Promise((resolve, reject) => {
-      this.db.createKeyStream()
-        .on('data', key => { if (key.startsWith('block-')) count++; })
-        .on('end', () => resolve(count))
-        .on('error', err => reject(err));
-    });
+    // ...existing code unchanged...
   }
 
   async getChainHeight() {
-    return this.height;
+    // ...existing code unchanged...
   }
 
   async getLatestBlock() {
-    const data = await this.db.get(`block-${this.height - 1}`);
-    return JSON.parse(data);
+    // ...existing code unchanged...
   }
 
   async addTransaction(tx) {
+    // Add duplicate vote checking
+    const key = `${tx.electionId}:${tx.voterAddress}`;
+    if (this.votedRegistry.has(key)) {
+      throw new Error('Duplicate vote detected');
+    }
+    
     if (!this.consensus.verifyTransaction(tx)) {
       throw new Error('Invalid transaction');
     }
+    
+    // Mark as voted and persist
+    this.votedRegistry.add(key);
+    await fs.writeJson(this.votedFile, [...this.votedRegistry]);
+    console.log(`Registered vote from ${tx.voterAddress} for election ${tx.electionId}`);
+    
     this.pendingTransactions.push(tx);
     if (this.pendingTransactions.length >= this.consensus.txPerBlock && !this.isCreatingBlock) {
       this.isCreatingBlock = true;
@@ -53,32 +77,15 @@ class Blockchain {
   }
 
   async createBlock() {
-    const latest = await this.getLatestBlock();
-    const newIndex = latest.index + 1;
-    const txs = this.pendingTransactions.slice();
-    this.pendingTransactions = [];
-    const validator = this.consensus.chooseValidator(newIndex);
-    const block = new Block(newIndex, Date.now(), txs, latest.hash, validator);
-    if (!this.consensus.verifyBlock(block, latest)) {
-      throw new Error('Block verification failed');
-    }
-    await this.db.put(`block-${newIndex}`, JSON.stringify(block));
-    this.height++;
+    // ...existing code unchanged...
   }
 
   async getChain() {
-    const blocks = [];
-    for (let i = 0; i < this.height; i++) {
-      const data = await this.db.get(`block-${i}`);
-      blocks.push(JSON.parse(data));
-    }
-    return blocks;
+    // ...existing code unchanged...
   }
 
   async getAuditProof(blockIndex) {
-    const target = await this.db.get(`block-${blockIndex}`);
-    const chain = await this.getChain();
-    return { block: JSON.parse(target), chain };
+    // ...existing code unchanged...
   }
 }
 

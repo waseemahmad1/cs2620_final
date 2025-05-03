@@ -20,14 +20,19 @@ export default function Home() {
   };
 
   const castVote = async () => {
-    if (!wallet) return alert('Connect wallet first.');
-    const payloadObj = { electionId, voteData };
-    const messageStr = JSON.stringify(payloadObj);
-    const signature = await wallet.signMessage(messageStr);
-    const voterAddress = await wallet.getAddress();
-    const payload = { voterAddress, electionId, voteData, signature };
-    const res = await axios.post('/api/castVote', payload);
-    setMessage(res.data.message);
+    try {
+      if (!wallet) return alert('Connect wallet first.');
+      const payloadObj = { electionId, voteData };
+      const messageStr = JSON.stringify(payloadObj);
+      const signature = await wallet.signMessage(messageStr);
+      const voterAddress = await wallet.getAddress();
+      const payload = { voterAddress, electionId, voteData, signature };
+      const res = await axios.post('/api/castVote', payload);
+      setMessage(res.data.message);
+    } catch (err) {
+      // Show the detailed error from the server if available
+      setMessage(`Error: ${err.response?.data?.error || err.message}`);
+    }
   };
 
   return (
