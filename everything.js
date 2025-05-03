@@ -1,9 +1,9 @@
 /* ================= README.md ================= */
-/*
-# Blockchain Voting System
+# Blockchain Voting System (IPFS Storage)
 
 ## Prerequisites
 - Node.js v16+ and npm
+- IPFS daemon running locally (`ipfs init` then `ipfs daemon`), or set `IPFS_API_URL`
 - MetaMask (or other Web3) browser extension
 
 ## Installation & Setup
@@ -14,7 +14,7 @@
    cd <repo_folder>
    ```
 
-2. **Server**
+2. **Server** (uses IPFS for block storage)
    ```bash
    cd server
    npm install
@@ -29,342 +29,330 @@
    ```
 
 ## Usage
-1. Open `http://localhost:3000` in your browser.
-2. Connect your MetaMask wallet when prompted.
-3. Enter an **Election ID** and your **Vote**, then click **Submit Vote**.
-4. To audit, navigate to `/audit` and input a block index.
-*/
+1. Ensure your IPFS daemon is running.
+2. Open `http://localhost:3000` and connect MetaMask.
+3. Cast votes and audit blocks (via `/audit`).
+
 
 /* ================= server/package.json ================= */
 {
-    "name": "blockchain-voting-server",
-    "version": "1.0.0",
-    "main": "index.js",
-    "scripts": {
-      "start": "node index.js"
-    },
-    "dependencies": {
-      "express": "^4.18.2",
-      "level": "^8.0.0",
-      "ethers": "^5.7.2",
-      "body-parser": "^1.20.2",
-      "fs-extra": "^11.1.1",
-      "axios": "^1.4.0"
-    }
+  "name": "blockchain-voting-server",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "ipfs-http-client": "^59.0.0",
+    "ethers": "^5.7.2",
+    "body-parser": "^1.20.2",
+    "fs-extra": "^11.1.1",
+    "path": "^0.12.7"
   }
-  
-  /* ================= server/peers.js ================= */
-  // List of peer node URLs
-  module.exports = [
-    'http://localhost:3001',
-    'http://localhost:3002'
-  ];
-  
-  /* ================= server/index.js ================= */
-  const express = require('express');
-  const bodyParser = require('body-parser');
-  const { Level } = require('level');
-  const fs = require('fs-extra');
-  const path = require('path');
-  const axios = require('axios');
-  const peers = require('./peers');
-  const { Blockchain } = require('../blockchain/Blockchain');
-  const { PoAConsensus } = require('../consensus/PoAConsensus');
-  
-  // Ensure DB directory exists
-  const dbDir = path.resolve(__dirname, 'voting-db');
-  fs.ensureDirSync(dbDir);
-  
-  let db;
+}
+
+/* ================= server/index.js ================= */
+const express = require('express');
+const bodyParser = require('body-parser');
+const { create } = require('ipfs-http-client');
+const path = require('path');
+const fs = require('fs-extra');
+const { Blockchain } = require('./blockchain/Blockchain');
+const { PoAConsensus } = require('./consensus/PoAConsensus');
+
+// Initialize IPFS client (default to localhost)
+const ipfs = create({ url: process.env.IPFS_API_URL || 'http://localhost:5001' });
+
+// Authority public keys for PoA consensus
+const authorityKeys = [ /* insert public keys */ ];
+const consensus = new PoAConsensus(authorityKeys);
+const chain = new Blockchain(ipfs, consensus);
+
+const app = express();
+app.use(bodyParser.json());
+
+// Cast vote endpoint
+app.post('/castVote', async (req, res) => {
   try {
-    db = new Level(dbDir, { valueEncoding: 'json' });
-  } catch (err) {
-    console.error(`Failed to open LevelDB at ${dbDir}:`, err);
-    process.exit(1);
-  }
-  
-  const authorityKeys = [ /* public keys here */ ];
-  const consensus = new PoAConsensus(authorityKeys);
-  const chain = new Blockchain(db, consensus);
-  const app = express();
-  app.use(bodyParser.json());
-  
-  // Broadcast utilities
-  tasync function broadcastToPeers(path, payload) {
-    for (const peer of peers) {
-      try {
-        await axios.post(`${peer}${path}`, payload);
-      } catch (e) {
-        console.warn(`Failed to broadcast to ${peer}${path}:`, e.message);
-      }
-    }
-  }
-  
-  // Sync chain from first peer
-  (async function syncChain() {
-    if (!peers.length) return;
-    try {
-      const res = await axios.get(`${peers[0]}/getChain`);
-      const remote = res.data;
-      const localHeight = await chain.getChainHeight();
-      if (remote.length > localHeight) {
-        for (let i = localHeight; i < remote.length; i++) {
-          await chain.addBlockFromRemote(remote[i]);
-        }
-        console.log(`Synced ${remote.length - localHeight} blocks from peer`);
-      }
-    } catch (e) {
-      console.warn('Chain sync failed:', e.message);
-    }
-  })();
-  
-  // Cast a new vote and broadcast
-  app.post('/castVote', async (req, res) => {
     const { voterAddress, electionId, voteData, signature } = req.body;
+    await chain.addTransaction({ voterAddress, electionId, voteData, signature });
+    res.json({ success: true, message: 'Vote submitted.' });
+  } catch (err) {
+    res.status(400).json({ success: false, error: err.message });
+  }
+});
+
+// Retrieve chain
+app.get('/getChain', async (req, res) => {
+  try {
+    const blocks = await chain.getChain();
+    res.json(blocks);
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Audit proof endpoint
+app.get('/auditProof', async (req, res) => {
+  try {
+    const idx = Number(req.query.blockIndex);
+    const proof = await chain.getAuditProof(idx);
+    res.json(proof);
+  } catch (err) {
+    res.status(400).json({ success: false, error: err.message });
+  }
+});
+
+const PORT = process.env.PORT || 3001;
+app.listen(PORT, () => console.log(`Server listening on port ${PORT}`));
+
+
+/* ================= server/blockchain/Block.js ================= */
+const { keccak256, toUtf8Bytes } = require('ethers').utils;
+
+class Block {
+  constructor(index, timestamp, transactions, previousHash, validator) {
+    this.index = index;
+    this.timestamp = timestamp;
+    this.transactions = transactions;
+    this.previousHash = previousHash;
+    this.validator = validator;
+    this.hash = this.computeHash();
+  }
+
+  computeHash() {
+    const data = `${this.index}${this.timestamp}${JSON.stringify(this.transactions)}${this.previousHash}${this.validator}`;
+    return keccak256(toUtf8Bytes(data));
+  }
+}
+
+module.exports = { Block };
+
+/* ================= server/blockchain/Blockchain.js ================= */
+const fs = require('fs-extra');
+const path = require('path');
+const { Block } = require('./Block');
+
+class Blockchain {
+  constructor(ipfsClient, consensus) {
+    this.ipfs = ipfsClient;
+    this.consensus = consensus;
+    this.pendingTransactions = [];
+    this.cidsFile = path.resolve(__dirname, '../blocks.json');
+    fs.ensureFileSync(this.cidsFile);
+    this.initializeChain();
+  }
+
+  async initializeChain() {
+    let cids;
     try {
-      await chain.addTransaction({ voterAddress, electionId, voteData, signature });
-      await broadcastToPeers('/receiveTransaction', req.body);
-      res.json({ success: true, message: 'Vote submitted.' });
-    } catch (err) {
-      res.status(400).json({ success: false, error: err.message });
+      cids = fs.readJsonSync(this.cidsFile);
+    } catch {
+      const genesis = new Block(0, Date.now(), [], '0', 'genesis');
+      const { cid } = await this.ipfs.add(JSON.stringify(genesis));
+      cids = [cid.toString()];
+      fs.writeJsonSync(this.cidsFile, cids);
     }
-  });
-  
-  // Receive a transaction from a peer
-  app.post('/receiveTransaction', async (req, res) => {
-    try {
-      await chain.addTransaction(req.body);
-      res.json({ success: true });
-    } catch (err) {
-      res.status(400).json({ success: false, error: err.message });
+    this.cids = cids;
+  }
+
+  async addTransaction(tx) {
+    if (!this.consensus.verifyTransaction(tx)) {
+      throw new Error('Invalid transaction');
     }
-  });
-  
-  // Receive a new block from a peer
-  app.post('/receiveBlock', async (req, res) => {
-    try {
-      await chain.addBlockFromRemote(req.body);
-      res.json({ success: true });
-    } catch (err) {
-      res.status(400).json({ success: false, error: err.message });
-    }
-  });
-  
-  // Get full chain
-  app.get('/getChain', async (req, res) => {
-    try {
-      const blocks = await chain.getChain();
-      res.json(blocks);
-    } catch (err) {
-      res.status(500).json({ success: false, error: err.message });
-    }
-  });
-  
-  // Audit proof
-  app.get('/auditProof', async (req, res) => {
-    try {
-      const proof = await chain.getAuditProof(Number(req.query.blockIndex));
-      res.json(proof);
-    } catch (err) {
-      res.status(400).json({ success: false, error: err.message });
-    }
-  });
-  
-  const PORT = process.env.PORT || 3001;
-  app.listen(PORT, () => console.log(`Server listening on port ${PORT}`));
-  
-  /* ================= blockchain/Block.js ================= */
-  const { keccak256, toUtf8Bytes } = require('ethers').utils;
-  class Block {
-    constructor(index, timestamp, transactions, previousHash, validator) {
-      this.index = index;
-      this.timestamp = timestamp;
-      this.transactions = transactions;
-      this.previousHash = previousHash;
-      this.validator = validator;
-      this.hash = this.computeHash();
-    }
-    computeHash() {
-      const data = `${this.index}${this.timestamp}${JSON.stringify(this.transactions)}${this.previousHash}${this.validator}`;
-      return keccak256(toUtf8Bytes(data));
+    this.pendingTransactions.push(tx);
+    if (this.pendingTransactions.length >= this.consensus.txPerBlock) {
+      await this.createBlock();
     }
   }
-  module.exports = { Block };
-  
-  /* ================= blockchain/Blockchain.js ================= */
-  const { Block } = require('./Block');
-  class Blockchain {
-    constructor(db, consensus) {
-      this.db = db;
-      this.consensus = consensus;
-      this.pendingTransactions = [];
-      this.isCreatingBlock = false;
-      this.height = 0;
-      this.initializeChain();
+
+  async createBlock() {
+    const lastCid = this.cids[this.cids.length - 1];
+    const prevData = await this.ipfs.cat(lastCid);
+    const previous = JSON.parse(Buffer.from(prevData).toString());
+    const newIndex = previous.index + 1;
+    const txs = this.pendingTransactions.splice(0);
+    const validator = this.consensus.chooseValidator(newIndex);
+    const block = new Block(newIndex, Date.now(), txs, previous.hash, validator);
+    if (!this.consensus.verifyBlock(block, previous)) {
+      throw new Error('Block verification failed');
     }
-    async initializeChain() {
-      try { await this.db.get('block-0'); } catch {
-        const genesis = new Block(0, Date.now(), [], '0', 'genesis');
-        await this.db.put('block-0', JSON.stringify(genesis));
-      }
-      this.height = await this._loadHeight();
-    }
-    async _loadHeight() {
-      let count = 0;
-      return new Promise((resolve, reject) => {
-        this.db.createKeyStream()
-          .on('data', key => { if (key.startsWith('block-')) count++; })
-          .on('end', () => resolve(count))
-          .on('error', err => reject(err));
-      });
-    }
-    async getChainHeight() { return this.height; }
-    async getLatestBlock() {
-      const data = await this.db.get(`block-${this.height-1}`);
-      return JSON.parse(data);
-    }
-    async addTransaction(tx) {
-      if (!this.consensus.verifyTransaction(tx)) throw new Error('Invalid transaction');
-      this.pendingTransactions.push(tx);
-      if (this.pendingTransactions.length >= this.consensus.txPerBlock && !this.isCreatingBlock) {
-        this.isCreatingBlock = true;
-        await this.createBlock();
-        this.isCreatingBlock = false;
-      }
-    }
-    async createBlock() {
-      const latest = await this.getLatestBlock();
-      const index = latest.index + 1;
-      const txs = [...this.pendingTransactions];
-      this.pendingTransactions = [];
-      const validator = this.consensus.chooseValidator(index);
-      const block = new Block(index, Date.now(), txs, latest.hash, validator);
-      if (!this.consensus.verifyBlock(block, latest)) throw new Error('Invalid block');
-      await this.db.put(`block-${index}`, JSON.stringify(block));
-      this.height++;
-    }
-    async addBlockFromRemote(blockObj) {
-      const latest = await this.getLatestBlock();
-      if (blockObj.previousHash !== latest.hash) throw new Error('Chain mismatch');
-      if (!this.consensus.verifyBlock(new Block(
-        blockObj.index,
-        blockObj.timestamp,
-        blockObj.transactions,
-        blockObj.previousHash,
-        blockObj.validator
-      ), latest)) throw new Error('Invalid remote block');
-      await this.db.put(`block-${blockObj.index}`, JSON.stringify(blockObj));
-      this.height++;
-    }
-    async getChain() {
-      const blocks = [];
-      for (let i = 0; i < this.height; i++) {
-        const data = await this.db.get(`block-${i}`);
-        blocks.push(JSON.parse(data));
-      }
-      return blocks;
-    }
-    async getAuditProof(idx) {
-      const target = await this.db.get(`block-${idx}`);
-      const chain = await this.getChain();
-      return { block: JSON.parse(target), chain };
-    }
+    const { cid } = await this.ipfs.add(JSON.stringify(block));
+    this.cids.push(cid.toString());
+    fs.writeJsonSync(this.cidsFile, this.cids);
   }
-  module.exports = { Blockchain };
-  
-  /* ================= consensus/PoAConsensus.js ================= */
-  class PoAConsensus {
-    constructor(authorityKeys) {
-      this.authorityKeys = authorityKeys;
-      this.txPerBlock = 10;
+
+  async getChain() {
+    const blocks = [];
+    for (const cid of this.cids) {
+      const data = await this.ipfs.cat(cid);
+      blocks.push(JSON.parse(Buffer.from(data).toString()));
     }
-    verifyTransaction(tx) {
-      const signer = require('ethers').utils.verifyMessage(
-        JSON.stringify({ electionId: tx.electionId, voteData: tx.voteData }),
-        tx.signature
-      );
-      return signer === tx.voterAddress;
-    }
-    chooseValidator(index) {
-      if (!this.authorityKeys.length) throw new Error('No authorities');
-      return this.authorityKeys[index % this.authorityKeys.length];
-    }
-    verifyBlock(block, previous) {
-      if (block.previousHash !== previous.hash) return false;
-      if (block.hash !== block.computeHash()) return false;
-      if (!this.authorityKeys.includes(block.validator)) return false;
-      return true;
-    }
+    return blocks;
   }
-  module.exports = { PoAConsensus };
-  
-  /* ================= client/package.json ================= */
-  {
-    "name": "blockchain-voting-client",
-    "version": "1.0.0",
-    "scripts": { "dev": "next dev", "build": "next build" },
-    "dependencies": {
-      "axios": "^1.4.0",
-      "ethers": "^5.7.2",
-      "react": "^18.2.0",
-      "react-dom": "^18.2.0",
-      "next": "^13.5.0"
+
+  async getAuditProof(idx) {
+    if (idx < 0 || idx >= this.cids.length) {
+      throw new Error('Invalid block index');
     }
+    const blockData = await this.ipfs.cat(this.cids[idx]);
+    const block = JSON.parse(Buffer.from(blockData).toString());
+    const chain = await this.getChain();
+    return { block, chain };
   }
-  
-  /* ================= client/pages/index.js ================= */
-  import { useState } from 'react';
-  import axios from 'axios';
-  import { ethers } from 'ethers';
-  export default function Home() {
-    const [eid, setEid] = useState('');
-    const [vote, setVote] = useState('');
-    const [wallet, setWallet] = useState(null);
-    const [msg, setMsg] = useState('');
-    const connectWallet = async () => {
-      if (!window.ethereum) return alert('MetaMask not detected');
-      const provider = new ethers.providers.Web3Provider(window.ethereum);
-      await provider.send('eth_requestAccounts', []);
-      setWallet(provider.getSigner());
-    };
-    const cast = async () => {
-      if (!wallet) return alert('Connect wallet');
-      const payload = { voterAddress: await wallet.getAddress(), electionId: eid, voteData: vote, signature: await wallet.signMessage(JSON.stringify({ electionId: eid, voteData: vote })) };
-      const res = await axios.post('/api/castVote', payload);
-      setMsg(res.data.message);
-    };
-    return (
-      <div style={{padding:'2rem'}}>
-        <h1>Voting</h1>
-        {!wallet ? <button onClick={connectWallet}>Connect MetaMask</button> : (
-          <>
-            <p>Address: {wallet._address}</p>
-            <input placeholder="Election ID" value={eid} onChange={e=>setEid(e.target.value)} />
-            <input placeholder="Your Vote" value={vote} onChange={e=>setVote(e.target.value)} />
-            <button onClick={cast}>Submit</button>
-            {msg && <p>{msg}</p>}
-          </>
-        )}
-      </div>
+}
+
+module.exports = { Blockchain };
+
+/* ================= server/consensus/PoAConsensus.js ================= */
+class PoAConsensus {
+  constructor(authorityKeys) {
+    this.authorityKeys = authorityKeys;
+    this.txPerBlock = 10;
+  }
+
+  verifyTransaction(tx) {
+    const signer = require('ethers').utils.verifyMessage(
+      JSON.stringify({ electionId: tx.electionId, voteData: tx.voteData }),
+      tx.signature
     );
+    return signer === tx.voterAddress;
   }
-  
-  /* ================= client/pages/api/castVote.js ================= */
-  import axios from 'axios';
-  export default async function handler(req,res){
-    try{const r=await axios.post('http://localhost:3001/castVote',req.body);res.status(r.status).json(r.data);}catch(e){res.status(500).json({error:e.message});}
+
+  chooseValidator(blockIndex) {
+    if (!this.authorityKeys.length) throw new Error('No authority keys');
+    return this.authorityKeys[blockIndex % this.authorityKeys.length];
   }
-  
-  /* ================= client/pages/audit.js ================= */
-  import {useState} from 'react';import axios from 'axios';
-  export default function Audit(){const [i,setI]=useState('');const [p,setP]=useState(null);
-    const get=async()=>{try{const r=await axios.get(`/api/auditProof?blockIndex=${i}`);setP(r.data);}catch(e){console.error(e);} };
-    return (<div style={{padding:'2rem'}}><h1>Audit</h1><input placeholder="Index" value={i} onChange={e=>setI(e.target.value)}/><button onClick={get}>Go</button>{p&&<pre>{JSON.stringify(p,null,2)}</pre>}</div>);
+
+  verifyBlock(block, previous) {
+    if (block.previousHash !== previous.hash) return false;
+    if (block.hash !== block.computeHash()) return false;
+    if (!this.authorityKeys.includes(block.validator)) return false;
+    return true;
   }
-  
-  /* ================= client/pages/api/auditProof.js ================= */
-  import axios from 'axios';
-  export default async function handler(req,res){
-    try{const{blockIndex}=req.query;const r=await axios.get(`http://localhost:3001/auditProof?blockIndex=${blockIndex}`);res.status(r.status).json(r.data);}catch(e){res.status(500).json({error:e.message});}
+}
+
+module.exports = { PoAConsensus };
+
+/* ================= client/package.json ================= */
+{
+  "name": "blockchain-voting-client",
+  "version": "1.0.0",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build"
+  },
+  "dependencies": {
+    "axios": "^1.4.0",
+    "ethers": "^5.7.2",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "next": "^13.5.0"
   }
-  
+}
+
+/* ================= client/pages/index.js ================= */
+import { useState } from 'react';
+import axios from 'axios';
+import { ethers } from 'ethers';
+
+export default function Home() {
+  const [electionId, setElectionId] = useState('');
+  const [voteData, setVoteData] = useState('');
+  const [wallet, setWallet] = useState(null);
+  const [message, setMessage] = useState('');
+
+  const connectWallet = async () => {
+    if (!window.ethereum) {
+      alert('MetaMask not detected');
+      return;
+    }
+    const provider = new ethers.providers.Web3Provider(window.ethereum);
+    await provider.send('eth_requestAccounts', []);
+    const signer = provider.getSigner();
+    setWallet(signer);
+  };
+
+  const castVote = async () => {
+    if (!wallet) return alert('Connect wallet first.');
+    const payloadObj = { electionId, voteData };
+    const messageStr = JSON.stringify(payloadObj);
+    const signature = await wallet.signMessage(messageStr);
+    const voterAddress = await wallet.getAddress();
+    const payload = { voterAddress, electionId, voteData, signature };
+    const res = await axios.post('/api/castVote', payload);
+    setMessage(res.data.message);
+  };
+
+  return (
+    <div style={{ padding: '2rem' }}>
+      <h1>Blockchain Voting</h1>
+      {!wallet ? (
+        <button onClick={connectWallet}>Connect MetaMask</button>
+      ) : (
+        <>
+          <p>Connected: {wallet._address}</p>
+          <input placeholder="Election ID" value={electionId} onChange={e => setElectionId(e.target.value)} />
+          <input placeholder="Your Vote" value={voteData} onChange={e => setVoteData(e.target.value)} />
+          <button onClick={castVote}>Submit Vote</button>
+          {message && <p>{message}</p>}
+        </>
+      )}
+    </div>
+  );
+}
+
+/* ================= client/pages/api/castVote.js ================= */
+import axios from 'axios';
+
+export default async function handler(req, res) {
+  try {
+    const response = await axios.post('http://localhost:3001/castVote', req.body);
+    res.status(response.status).json(response.data);
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+}
+
+/* ================= client/pages/audit.js ================= */
+import { useState } from 'react';
+import axios from 'axios';
+
+export default function Audit() {
+  const [index, setIndex] = useState('');
+  const [proof, setProof] = useState(null);
+
+  const getProof = async () => {
+    try {
+      const res = await axios.get(`/api/auditProof?blockIndex=${index}`);
+      setProof(res.data);
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  return (
+    <div style={{ padding: '2rem' }}>
+      <h1>Audit Proof</h1>
+      <input placeholder="Block Index" value={index} onChange={e => setIndex(e.target.value)} />
+      <button onClick={getProof}>Get Proof</button>
+      {proof && <pre>{JSON.stringify(proof, null, 2)}</pre>}
+    </div>
+  );
+}
+
+/* ================= client/pages/api/auditProof.js ================= */
+import axios from 'axios';
+
+export default async function handler(req, res) {
+  try {
+    const { blockIndex } = req.query;
+    const response = await axios.get(
+      `http://localhost:3001/auditProof?blockIndex=${blockIndex}`
+    );
+    res.status(response.status).json(response.data);
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+}
