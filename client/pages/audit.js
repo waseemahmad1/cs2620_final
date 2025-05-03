@@ -17,11 +17,7 @@ export default function Audit() {
   return (
     <div style={{ padding: '2rem' }}>
       <h1>Audit Proof</h1>
-      <input
-        placeholder="Block Index"
-        value={index}
-        onChange={e => setIndex(e.target.value)}
-      />
+      <input placeholder="Block Index" value={index} onChange={e => setIndex(e.target.value)} />
       <button onClick={getProof}>Get Proof</button>
       {proof && <pre>{JSON.stringify(proof, null, 2)}</pre>}
     </div>

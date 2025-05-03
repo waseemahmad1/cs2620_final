@@ -38,16 +38,8 @@ export default function Home() {
       ) : (
         <>
           <p>Connected: {wallet._address}</p>
-          <input
-            placeholder="Election ID"
-            value={electionId}
-            onChange={e => setElectionId(e.target.value)}
-          />
-          <input
-            placeholder="Your Vote"
-            value={voteData}
-            onChange={e => setVoteData(e.target.value)}
-          />
+          <input placeholder="Election ID" value={electionId} onChange={e => setElectionId(e.target.value)} />
+          <input placeholder="Your Vote" value={voteData} onChange={e => setVoteData(e.target.value)} />
           <button onClick={castVote}>Submit Vote</button>
           {message && <p>{message}</p>}
         </>

@@ -1,37 +1,26 @@
 const express = require('express');
 const bodyParser = require('body-parser');
-const level = require('level');
-const fs = require('fs-extra');
+const { create } = require('ipfs-http-client');
 const path = require('path');
+const fs = require('fs-extra');
 const { Blockchain } = require('./blockchain/Blockchain');
 const { PoAConsensus } = require('./consensus/PoAConsensus');
 
-// Ensure DB directory exists
-const dbDir = path.resolve(__dirname, 'voting-db');
-fs.ensureDirSync(dbDir);
-
-let db;
-try {
-  db = level(dbDir);
-} catch (err) {
-  console.error(`Failed to open LevelDB at ${dbDir}:`, err);
-  process.exit(1);
-}
+// Initialize IPFS client (default to localhost)
+const ipfs = create({ url: process.env.IPFS_API_URL || 'http://localhost:5001' });
 
 // Authority public keys for PoA consensus
-const authorityKeys = [
-  // insert authority public keys here
-];
+const authorityKeys = [ /* insert public keys */ ];
 const consensus = new PoAConsensus(authorityKeys);
-const chain = new Blockchain(db, consensus);
+const chain = new Blockchain(ipfs, consensus);
 
 const app = express();
 app.use(bodyParser.json());
 
-// Endpoint to cast a vote
+// Cast vote endpoint
 app.post('/castVote', async (req, res) => {
-  const { voterAddress, electionId, voteData, signature } = req.body;
   try {
+    const { voterAddress, electionId, voteData, signature } = req.body;
     await chain.addTransaction({ voterAddress, electionId, voteData, signature });
     res.json({ success: true, message: 'Vote submitted.' });
   } catch (err) {
@@ -39,7 +28,7 @@ app.post('/castVote', async (req, res) => {
   }
 });
 
-// Retrieve full blockchain
+// Retrieve chain
 app.get('/getChain', async (req, res) => {
   try {
     const blocks = await chain.getChain();
@@ -49,11 +38,11 @@ app.get('/getChain', async (req, res) => {
   }
 });
 
-// Get audit proof for a block index
+// Audit proof endpoint
 app.get('/auditProof', async (req, res) => {
-  const { blockIndex } = req.query;
   try {
-    const proof = await chain.getAuditProof(Number(blockIndex));
+    const idx = Number(req.query.blockIndex);
+    const proof = await chain.getAuditProof(idx);
     res.json(proof);
   } catch (err) {
     res.status(400).json({ success: false, error: err.message });
