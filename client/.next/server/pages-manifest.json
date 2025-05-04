@@ -2,6 +2,7 @@
   "/_app": "pages/_app.js",
   "/_error": "pages/_error.js",
   "/_document": "pages/_document.js",
-  "/": "pages/index.js",
-  "/api/castVote": "pages/api/castVote.js"
+  "/api/castVote": "pages/api/castVote.js",
+  "/api/closeElection": "pages/api/closeElection.js",
+  "/": "pages/index.js"
 }
