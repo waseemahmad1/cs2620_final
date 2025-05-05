@@ -2,7 +2,7 @@ import axios from 'axios';
 
 export default async function handler(req, res) {
   try {
-    const response = await axios.post('http://localhost:3001/closeElection', req.body);
+    const response = await axios.post('http://localhost:4850/closeElection', req.body);
     return res.status(response.status).json(response.data);
   } catch (err) {
     if (err.response) {

@@ -3,14 +3,16 @@ const path = require('path');
 const { Block } = require('./Block');
 
 class Blockchain {
-  constructor(ipfs, consensus) {
-    this.ipfs = ipfs;       // Store IPFS client properly
+  // Add Redis as parameter to constructor
+  constructor(ipfs, consensus, redis) {
+    this.ipfs = ipfs;
     this.consensus = consensus;
+    this.redis = redis;  // Store Redis client
     this.pendingTransactions = [];
     this.isCreatingBlock = false;
     this.height = 0;
     
-    // Initialize our CIDs file path and array
+    // File storage still useful as backup
     this.cidsFile = path.resolve(__dirname, '../blocks.json');
     fs.ensureFileSync(this.cidsFile);
     
@@ -23,19 +25,30 @@ class Blockchain {
   }
 
   async initializeChain() {
-    // Load CID list from file
+    // Try to load CIDs from Redis first
+    try {
+      const cidsData = await this.redis.get('blockchain:cids');
+      if (cidsData) {
+        this.cids = JSON.parse(cidsData);
+        this.height = this.cids.length;
+        console.log(`Loaded ${this.cids.length} block CIDs from Redis`);
+        return;
+      }
+    } catch (err) {
+      console.warn('Redis CIDs load failed:', err.message);
+    }
+    
+    // Fall back to file if Redis fails
     try {
       this.cids = await fs.readJson(this.cidsFile);
-      console.log(`Loaded ${this.cids.length} block CIDs`);
       this.height = this.cids.length;
+      console.log(`Loaded ${this.cids.length} block CIDs from file`);
+      
+      // Sync to Redis for other servers
+      await this.redis.set('blockchain:cids', JSON.stringify(this.cids));
     } catch (err) {
-      // Create genesis block if no blocks exist
-      console.log('No blocks found, creating genesis block');
-      const genesis = new Block(0, Date.now(), [], '0', 'genesis');
-      const { cid } = await this.ipfs.add(JSON.stringify(genesis));
-      this.cids = [cid.toString()];
-      await fs.writeJson(this.cidsFile, this.cids);
-      this.height = 1;
+      console.log('No existing chain found, starting new chain');
+      this.cids = [];
     }
       
     // Load voted registry
@@ -119,13 +132,23 @@ class Blockchain {
       // Add the CID to our array of block CIDs
       this.cids[newIndex] = cid.toString();
       
-      // Persist the updated CID array
+      // Save to Redis for other servers
+      await this.redis.set('blockchain:cids', JSON.stringify(this.cids));
+      
+      // Also save to file as backup
       await fs.writeJson(this.cidsFile, this.cids);
 
       // Update chain height
       this.height++;
 
       console.log(`Created block ${newIndex} with CID ${cid.toString()}`);
+      
+      // Publish event to notify other servers
+      await this.redis.publish('blockchain:new-block', JSON.stringify({
+        index: newIndex,
+        cid: cid.toString()
+      }));
+      
       return block;
     } catch (err) {
       console.error(`Failed to create block: ${err.message}`);
@@ -133,7 +156,16 @@ class Blockchain {
     }
   }
 
-  async getChain() {
+  async getChain(timeout = 5000) {
+    return Promise.race([
+      this._getChainImpl(),
+      new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('IPFS timeout')), timeout)
+      )
+    ]);
+  }
+
+  async _getChainImpl() {
     try {
       const blocks = [];
       for (let i = 0; i < this.cids.length; i++) {
@@ -183,6 +215,55 @@ class Blockchain {
       throw new Error(`Failed to get audit proof: ${err.message}`);
     }
   }
+
+  // Add a method to listen for updates from other servers
+  async startBlockchainSync() {
+    try {
+      console.log('Creating Redis subscriber...');
+      const subscriber = this.redis.duplicate();
+      
+      console.log('Subscribing to blockchain:new-block channel...');
+      // Add timeout to avoid hanging forever
+      await Promise.race([
+        subscriber.subscribe('blockchain:new-block'),
+        new Promise((_, reject) => setTimeout(() => 
+          reject(new Error('Redis subscription timeout')), 5000))
+      ]);
+      
+      console.log('Successfully subscribed to blockchain updates');
+      
+      subscriber.on('message', async (channel, message) => {
+        // Rest of your handler code...
+      });
+      
+      console.log('Started listening for blockchain updates from other servers');
+    } catch (err) {
+      console.error('Error in blockchain sync setup:', err.message);
+      console.log('Continuing with server startup despite sync issues');
+      // Important: don't rethrow, allow server to continue
+    }
+  }
 }
 
 module.exports = { Blockchain };
+
+async function startServer() {
+  try {
+    console.log('Starting server initialization...');
+    
+    // Initialize the blockchain instance
+    const chain = new Blockchain(ipfs, consensus, redis);
+    console.log('Blockchain instance created');
+    
+    // Other initialization...
+    console.log('Starting blockchain sync...');
+    await chain.startBlockchainSync();
+    console.log('Blockchain sync initialized');
+    
+    // Express setup...
+    console.log('Express server configured, starting to listen...');
+    
+  } catch (err) {
+    console.error('Server initialization failed:', err);
+  }
+}
