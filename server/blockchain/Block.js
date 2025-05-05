@@ -10,6 +10,7 @@ class Block {
     this.hash = this.computeHash();
   }
 
+  
   computeHash() {
     const data = `${this.index}${this.timestamp}${JSON.stringify(this.transactions)}${this.previousHash}${this.validator}`;
     return keccak256(toUtf8Bytes(data));
