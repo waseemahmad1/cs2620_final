@@ -2,30 +2,31 @@ const fs = require('fs-extra');
 const path = require('path');
 const { Block } = require('./Block');
 
+// blockchain class
 class Blockchain {
-  // Add Redis as parameter to constructor
+  // constructor sets up blockchain properties
   constructor(ipfs, consensus, redis) {
     this.ipfs = ipfs;
     this.consensus = consensus;
-    this.redis = redis;  // Store Redis client
+    this.redis = redis;
     this.pendingTransactions = [];
     this.isCreatingBlock = false;
     this.height = 0;
-    
-    // File storage still useful as backup
+
+    // file for storing block cids
     this.cidsFile = path.resolve(__dirname, '../blocks.json');
     fs.ensureFileSync(this.cidsFile);
-    
-    // Add voted registry functionality
+
+    // file for storing voted registry
     this.votedFile = path.resolve(__dirname, '../voted.json');
     fs.ensureFileSync(this.votedFile);
     this.votedRegistry = new Set();
-    
+
     this.initializeChain();
   }
 
+  // load chain and voted registry from redis or file
   async initializeChain() {
-    // Try to load CIDs from Redis first
     try {
       const cidsData = await this.redis.get('blockchain:cids');
       if (cidsData) {
@@ -37,21 +38,17 @@ class Blockchain {
     } catch (err) {
       console.warn('Redis CIDs load failed:', err.message);
     }
-    
-    // Fall back to file if Redis fails
+
     try {
       this.cids = await fs.readJson(this.cidsFile);
       this.height = this.cids.length;
       console.log(`Loaded ${this.cids.length} block CIDs from file`);
-      
-      // Sync to Redis for other servers
       await this.redis.set('blockchain:cids', JSON.stringify(this.cids));
     } catch (err) {
       console.log('No existing chain found, starting new chain');
       this.cids = [];
     }
-      
-    // Load voted registry
+
     try {
       const votedList = await fs.readJson(this.votedFile);
       this.votedRegistry = new Set(votedList);
@@ -62,20 +59,19 @@ class Blockchain {
     }
   }
 
+  // get current chain height
   async getChainHeight() {
     return this.height;
   }
 
+  // get the latest block from the chain
   async getLatestBlock() {
     try {
       if (this.height === 0 || this.cids.length === 0) {
         return null;
       }
-      
       const latestCid = this.cids[this.height - 1];
       if (!latestCid) return null;
-      
-      // Properly handle AsyncIterable from ipfs.cat()
       let content = [];
       for await (const chunk of this.ipfs.cat(latestCid)) {
         content.push(chunk);
@@ -88,22 +84,24 @@ class Blockchain {
     }
   }
 
+  // add a transaction to the blockchain
   async addTransaction(tx) {
-    // Add duplicate vote checking
+    // check for duplicate vote
     const key = `${tx.electionId}:${tx.voterAddress}`;
     if (this.votedRegistry.has(key)) {
       throw new Error('Duplicate vote detected');
     }
-    
+
+    // verify transaction
     if (!this.consensus.verifyTransaction(tx)) {
       throw new Error('Invalid transaction');
     }
-    
-    // Mark as voted and persist
+
+    // mark as voted and save
     this.votedRegistry.add(key);
     await fs.writeJson(this.votedFile, [...this.votedRegistry]);
     console.log(`Registered vote from ${tx.voterAddress} for election ${tx.electionId}`);
-    
+
     this.pendingTransactions.push(tx);
     if (this.pendingTransactions.length >= this.consensus.txPerBlock && !this.isCreatingBlock) {
       this.isCreatingBlock = true;
@@ -112,43 +110,44 @@ class Blockchain {
     }
   }
 
+  // create a new block and add to chain
   async createBlock() {
     try {
-      // Get the latest block for its hash
+      // get previous block
       const previousBlock = await this.getLatestBlock();
 
-      // Create new block
+      // create new block
       const newIndex = this.height;
       const txs = this.pendingTransactions.splice(0);
       const validator = this.consensus.chooseValidator(newIndex);
       const block = new Block(newIndex, Date.now(), txs, previousBlock ? previousBlock.hash : '0', validator);
 
-      // Convert block to JSON string for storage
+      // convert block to string
       const blockString = JSON.stringify(block);
-      
-      // Store in IPFS (not LevelDB)e block to IPFS
+
+      // add block to ipfs
       const { cid } = await this.ipfs.add(blockString);
-      
-      // Add the CID to our array of block CIDs
+
+      // save cid to array
       this.cids[newIndex] = cid.toString();
-      
-      // Save to Redis for other servers
+
+      // save cids to redis
       await this.redis.set('blockchain:cids', JSON.stringify(this.cids));
-      
-      // Also save to file as backup
+
+      // save cids to file
       await fs.writeJson(this.cidsFile, this.cids);
 
-      // Update chain height
+      // update height
       this.height++;
 
       console.log(`Created block ${newIndex} with CID ${cid.toString()}`);
-      
-      // Publish event to notify other servers
+
+      // notify other servers
       await this.redis.publish('blockchain:new-block', JSON.stringify({
         index: newIndex,
         cid: cid.toString()
       }));
-      
+
       return block;
     } catch (err) {
       console.error(`Failed to create block: ${err.message}`);
@@ -156,21 +155,22 @@ class Blockchain {
     }
   }
 
+  // get the full chain with a timeout
   async getChain(timeout = 5000) {
     return Promise.race([
       this._getChainImpl(),
-      new Promise((_, reject) => 
+      new Promise((_, reject) =>
         setTimeout(() => reject(new Error('IPFS timeout')), timeout)
       )
     ]);
   }
 
+  // helper to get all blocks from ipfs
   async _getChainImpl() {
     try {
       const blocks = [];
       for (let i = 0; i < this.cids.length; i++) {
         try {
-          // Properly handle AsyncIterable from ipfs.cat()
           let content = [];
           for await (const chunk of this.ipfs.cat(this.cids[i])) {
             content.push(chunk);
@@ -188,59 +188,55 @@ class Blockchain {
     }
   }
 
+  // get audit proof for a block
   async getAuditProof(blockIndex) {
     try {
       if (blockIndex < 0 || blockIndex >= this.height) {
         throw new Error('Invalid block index');
       }
-      
-      // Use IPFS instead of LevelDB
       const cid = this.cids[blockIndex];
       if (!cid) {
         throw new Error(`No CID found for block ${blockIndex}`);
       }
-      
       let content = [];
       for await (const chunk of this.ipfs.cat(cid)) {
         content.push(chunk);
       }
       const blockData = Buffer.concat(content).toString();
       const block = JSON.parse(blockData);
-      
-      // Get the entire chain for verification
+
+      // get the full chain
       const chain = await this.getChain();
-      
+
       return { block, chain };
     } catch (err) {
       throw new Error(`Failed to get audit proof: ${err.message}`);
     }
   }
 
-  // Add a method to listen for updates from other servers
+  // listen for updates from other servers
   async startBlockchainSync() {
     try {
       console.log('Creating Redis subscriber...');
       const subscriber = this.redis.duplicate();
-      
+
       console.log('Subscribing to blockchain:new-block channel...');
-      // Add timeout to avoid hanging forever
       await Promise.race([
         subscriber.subscribe('blockchain:new-block'),
-        new Promise((_, reject) => setTimeout(() => 
+        new Promise((_, reject) => setTimeout(() =>
           reject(new Error('Redis subscription timeout')), 5000))
       ]);
-      
+
       console.log('Successfully subscribed to blockchain updates');
-      
+
       subscriber.on('message', async (channel, message) => {
-        // Rest of your handler code...
+        // handle new block notifications here
       });
-      
+
       console.log('Started listening for blockchain updates from other servers');
     } catch (err) {
       console.error('Error in blockchain sync setup:', err.message);
       console.log('Continuing with server startup despite sync issues');
-      // Important: don't rethrow, allow server to continue
     }
   }
 }
@@ -250,19 +246,13 @@ module.exports = { Blockchain };
 async function startServer() {
   try {
     console.log('Starting server initialization...');
-    
-    // Initialize the blockchain instance
     const chain = new Blockchain(ipfs, consensus, redis);
     console.log('Blockchain instance created');
-    
-    // Other initialization...
     console.log('Starting blockchain sync...');
     await chain.startBlockchainSync();
     console.log('Blockchain sync initialized');
-    
     // Express setup...
     console.log('Express server configured, starting to listen...');
-    
   } catch (err) {
     console.error('Server initialization failed:', err);
   }

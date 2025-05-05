@@ -2,13 +2,16 @@ import { useState, useEffect } from 'react';
 import axios from 'axios';
 import { ethers } from 'ethers';
 
+// main home component for blockchain voting app
 export default function Home() {
+  // state variables for election id, vote data, wallet, messages, and ledger
   const [electionId, setElectionId] = useState('');
   const [voteData, setVoteData] = useState('');
   const [wallet, setWallet] = useState(null);
   const [message, setMessage] = useState('');
   const [ledger, setLedger] = useState([]);
 
+  // connect to metamask wallet
   const connectWallet = async () => {
     if (!window.ethereum) {
       alert('MetaMask not detected');
@@ -20,7 +23,7 @@ export default function Home() {
     setWallet(signer);
   };
 
-  // Create Election handler
+  // handler for creating a new election
   const handleCreate = async () => {
     try {
       const electionId = prompt('Enter new Election ID:');
@@ -34,7 +37,7 @@ export default function Home() {
     }
   };
 
-  // Vote handler (enhanced version using prompts)
+  // handler for voting using prompts
   const handleVote = async () => {
     try {
       const electionId = prompt('Enter Election ID:');
@@ -56,7 +59,7 @@ export default function Home() {
     }
   };
 
-  // Original vote handler (using form inputs)
+  // handler for voting using form inputs
   const castVote = async () => {
     try {
       if (!wallet) return alert('Connect wallet first.');
@@ -68,20 +71,18 @@ export default function Home() {
       const res = await axios.post('/api/castVote', payload);
       setMessage(res.data.message);
     } catch (err) {
-      // Show the detailed error from the server if available
+      // show the detailed error from the server if available
       setMessage(`Error: ${err.response?.data?.error || err.message}`);
     }
   };
 
-  // Add this function with your other handlers
+  // handler for closing an election
   const handleClose = async () => {
     try {
       const electionId = prompt('Enter Election ID to close:');
       if (!electionId) return;
-      
       const message = JSON.stringify({ action: 'close', electionId });
       const signature = await wallet.signMessage(message);
-      
       const res = await axios.post('/api/closeElection', { electionId, signature });
       setMessage(res.data.success ? 'Election closed successfully!' : res.data.error);
     } catch (err) {
@@ -89,7 +90,7 @@ export default function Home() {
     }
   };
 
-  // View Ledger handler
+  // handler for viewing the ledger of an election
   const handleViewLedger = async () => {
     const electionId = prompt('Enter Election ID to view history:');
     if (!electionId) return;
@@ -108,13 +109,14 @@ export default function Home() {
   return (
     <div style={{ padding: '2rem' }}>
       <h1>Blockchain Voting</h1>
+      {/* show connect button if wallet not connected */}
       {!wallet ? (
         <button onClick={connectWallet}>Connect MetaMask</button>
       ) : (
         <>
           <p>Connected: {wallet._address}</p>
           
-          {/* Enhanced UI with new buttons */}
+          {/* buttons for election actions */}
           <div style={{ marginBottom: '1rem' }}>
             <button 
               onClick={handleCreate} 
@@ -142,7 +144,7 @@ export default function Home() {
             </button>
           </div>
 
-          {/* Original form for voting */}
+          {/* form for voting using inputs */}
           <div style={{ marginTop: '1rem' }}>
             <h3>Vote with Form</h3>
             <input placeholder="Election ID" value={electionId} onChange={e => setElectionId(e.target.value)} />
@@ -150,9 +152,10 @@ export default function Home() {
             <button onClick={castVote}>Submit Vote</button>
           </div>
           
+          {/* display message if any */}
           {message && <p style={{ marginTop: '1rem', fontWeight: 'bold' }}>{message}</p>}
           
-          {/* Display ledger results */}
+          {/* display ledger results if available */}
           {ledger.length > 0 && (
             <div style={{ marginTop: '2rem', padding: '1rem', border: '1px solid #ddd', borderRadius: '5px' }}>
               <h2>Election History</h2>

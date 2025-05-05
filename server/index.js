@@ -7,14 +7,14 @@ const Redis = require('ioredis');
 const { Blockchain } = require('./blockchain/Blockchain');
 const { PoAConsensus } = require('./consensus/PoAConsensus');
 
-// ---- Redis setup ----
-// Commands will buffer until Redis is ready (default behavior)
+// set up redis connection, usually we would hide this but for demo purposes for class it's okay
 const redis = new Redis({
-  host: '127.0.0.1',
-  port: 6379
+  host: 'localhost',
+  port: 3472,
+  password: 'waseem'
 });
 
-// ---- Consul stub for service discovery (local dev) ----
+// stub consul for service discovery (not used in prod)
 const consul = {
   catalog: {
     service: {
@@ -23,37 +23,36 @@ const consul = {
   }
 };
 
-// (Optional) Utility for discovering other servers
+// get available servers (stubbed)
 async function getAvailableServers() {
   const services = await consul.catalog.service.nodes('blockchain-voting');
   return services.filter(s => s.ServiceStatus === 'passing');
 }
 
 async function startServer() {
-  // Ensure any local storage directories exist
+  // ensure voting-db directory exists
   const dbDir = path.resolve(__dirname, 'voting-db');
   fs.ensureDirSync(dbDir);
 
-  // Dynamically import ESM-only IPFS client
+  // import ipfs client and connect to local ipfs node
   const ipfsModule = await import('ipfs-http-client');
   const createIpfs = ipfsModule.create;
   const ipfs = createIpfs({ url: 'http://localhost:5001' });
 
-  // Proof-of-Authority setup: list your validator addresses here
+  // set up proof-of-authority consensus with validator addresses, usually we would hide this but for demo purposes for class it's okay
   const authorityKeys = [
     '0x206120Cdc0d7F8F66b2d1Fb774158e53F4f67658'
-    // add more as needed
   ];
   const consensus = new PoAConsensus(authorityKeys);
 
-  // Initialize the blockchain (backed by IPFS + Redis)
+  // initialize blockchain with ipfs, consensus, and redis
   const chain = new Blockchain(ipfs, consensus, redis);
 
-  // ---- Express app & routes ----
+  // set up express app
   const app = express();
   app.use(bodyParser.json());
 
-  // Create Election
+  // create election endpoint
   app.post('/createElection', async (req, res) => {
     try {
       const { electionId, signature } = req.body;
@@ -74,7 +73,7 @@ async function startServer() {
     }
   });
 
-  // Get Election
+  // get election endpoint
   app.get('/getElection', async (req, res) => {
     try {
       const key = `election-${req.query.electionId}`;
@@ -86,7 +85,7 @@ async function startServer() {
     }
   });
 
-  // Cast Vote
+  // cast vote endpoint
   app.post('/castVote', async (req, res) => {
     try {
       const { voterAddress, electionId, voteData, signature } = req.body;
@@ -104,7 +103,7 @@ async function startServer() {
     }
   });
 
-  // Close Election
+  // close election endpoint
   app.post('/closeElection', async (req, res) => {
     try {
       const { electionId, signature } = req.body;
@@ -128,7 +127,7 @@ async function startServer() {
     }
   });
 
-  // View Ledger (votes for an election)
+  // get ledger (votes for an election) endpoint
   app.get('/getLedger', async (req, res) => {
     try {
       const { electionId } = req.query;
@@ -144,7 +143,7 @@ async function startServer() {
     }
   });
 
-  // Retrieve full chain
+  // get full chain endpoint
   app.get('/getChain', async (req, res) => {
     try {
       res.json(await chain.getChain());
@@ -153,7 +152,7 @@ async function startServer() {
     }
   });
 
-  // Audit proof
+  // audit proof endpoint
   app.get('/auditProof', async (req, res) => {
     try {
       const idx = Number(req.query.blockIndex);
@@ -163,23 +162,23 @@ async function startServer() {
     }
   });
 
-  // Health check
+  // health check endpoint
   app.get('/health', (req, res) => res.send('OK'));
 
-  // ---- Start HTTP server (before sync) ----
+  // start express server
   const PORT = process.env.PORT || 3001;
   const HOST = '0.0.0.0';
   app.listen(PORT, HOST, () => {
     console.log(`✅ Server listening on ${HOST}:${PORT}`);
   });
 
-  // ---- Kick off blockchain synchronization in background ----
+  // start blockchain sync in background
   chain.startBlockchainSync()
     .then(() => console.log('🔄 Blockchain sync started'))
     .catch(err => console.error('❌ Blockchain sync error:', err));
 }
 
-// Invoke startup
+// start the server
 startServer().catch(err => {
   console.error('Failed to start server:', err);
   process.exit(1);
