@@ -15,8 +15,10 @@ async function startServer() {
   // Initialize IPFS client (default to localhost)
   const ipfs = create({ url: process.env.IPFS_API_URL || 'http://localhost:5001' });
 
-  // Authority public keys for PoA consensus
-  const authorityKeys = [ /* insert public keys */ ];
+  // PoA consensus setup: at least one validator key is required
+  const authorityKeys = [
+    '0x206120Cdc0d7F8F66b2d1Fb774158e53F4f67658',  // your test wallet
+  ];
   const consensus = new PoAConsensus(authorityKeys);
   const chain = new Blockchain(ipfs, consensus);
 
@@ -136,6 +138,31 @@ async function startServer() {
       const idx = Number(req.query.blockIndex);
       const proof = await chain.getAuditProof(idx);
       res.json(proof);
+    } catch (err) {
+      res.status(400).json({ success: false, error: err.message });
+    }
+  });
+
+  // 5) View Ledger (Get all votes for a given election)
+  app.get('/getLedger', async (req, res) => {
+    try {
+      const { electionId } = req.query;
+      
+      // ensure election exists
+      const key = `election-${electionId}`;
+      if (!elections.has(key)) {
+        return res.status(404).json({ success: false, error: 'Election not found' });
+      }
+      
+      // fetch full chain from blockchain
+      const blocks = await chain.getChain();
+      
+      // collect only transactions for this election
+      const votes = blocks
+        .flatMap(block => block.transactions)
+        .filter(tx => tx.electionId === electionId);
+        
+      res.json({ success: true, votes });
     } catch (err) {
       res.status(400).json({ success: false, error: err.message });
     }

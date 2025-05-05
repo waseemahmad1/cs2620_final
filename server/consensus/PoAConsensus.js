@@ -1,7 +1,7 @@
 class PoAConsensus {
   constructor(authorityKeys) {
     this.authorityKeys = authorityKeys;
-    this.txPerBlock = 10;
+    this.txPerBlock = 1;
   }
 
   verifyTransaction(tx) {

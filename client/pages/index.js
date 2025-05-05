@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import axios from 'axios';
 import { ethers } from 'ethers';
 
@@ -7,6 +7,7 @@ export default function Home() {
   const [voteData, setVoteData] = useState('');
   const [wallet, setWallet] = useState(null);
   const [message, setMessage] = useState('');
+  const [ledger, setLedger] = useState([]);
 
   const connectWallet = async () => {
     if (!window.ethereum) {
@@ -88,6 +89,22 @@ export default function Home() {
     }
   };
 
+  // View Ledger handler
+  const handleViewLedger = async () => {
+    const electionId = prompt('Enter Election ID to view history:');
+    if (!electionId) return;
+    try {
+      const { data } = await axios.get('/api/getLedger', {
+        params: { electionId }
+      });
+      setLedger(data.votes);
+      setMessage('');
+    } catch (err) {
+      setMessage(`Error: ${err.response?.data?.error || err.message}`);
+      setLedger([]);
+    }
+  };
+
   return (
     <div style={{ padding: '2rem' }}>
       <h1>Blockchain Voting</h1>
@@ -117,6 +134,12 @@ export default function Home() {
             >
               End Election
             </button>
+            <button 
+              onClick={handleViewLedger}
+              style={{ background: '#9C27B0', color: 'white', padding: '8px 16px' }}
+            >
+              View Ledger
+            </button>
           </div>
 
           {/* Original form for voting */}
@@ -128,6 +151,20 @@ export default function Home() {
           </div>
           
           {message && <p style={{ marginTop: '1rem', fontWeight: 'bold' }}>{message}</p>}
+          
+          {/* Display ledger results */}
+          {ledger.length > 0 && (
+            <div style={{ marginTop: '2rem', padding: '1rem', border: '1px solid #ddd', borderRadius: '5px' }}>
+              <h2>Election History</h2>
+              <ul style={{ listStyleType: 'none', padding: 0 }}>
+                {ledger.map(({ voterAddress, voteData }, i) => (
+                  <li key={i} style={{ padding: '8px 0', borderBottom: '1px solid #eee' }}>
+                    <strong>{voterAddress.substring(0, 10)}...{voterAddress.substring(32)}</strong> voted "{voteData}"
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </>
       )}
     </div>
